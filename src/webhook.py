@@ -10,6 +10,26 @@ from src.utils import levenshtein, parse_likely_languages
 
 webhook_bp = Blueprint('webhook', __name__)
 
+# Eventyay may send its native event name as message_type (e.g.
+# "channel.message", "reaction") rather than our short moderation code.
+# Normalise every incoming value to one of text/emoji/qa so an unexpected
+# type never reaches the database — an out-of-range value silently corrupts
+# the row and makes the queue read raise on load (issue #2).
+_MESSAGE_TYPE_ALIASES = {
+    'text':            'text',
+    'message':         'text',
+    'channel.message': 'text',
+    'emoji':           'emoji',
+    'reaction':        'emoji',
+    'event.reaction':  'emoji',
+    'qa':              'qa',
+    'question':        'qa',
+}
+
+
+def _normalize_message_type(raw: str | None) -> str:
+    return _MESSAGE_TYPE_ALIASES.get((raw or 'text').strip().lower(), 'text')
+
 
 def _verify_hmac(secret: str, body: bytes, signature: str) -> bool:
     expected = 'sha256=' + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
@@ -149,7 +169,7 @@ def _process_message(channel: Channel, data: dict) -> None:
     centralauth_id = int(data['centralauth_id']) if data.get('centralauth_id') else None
     wiki_username  = (data.get('centralauth_username') or '').strip() or None
     message_text   = (data.get('message') or '').strip()
-    message_type   = data.get('message_type', 'text')
+    message_type   = _normalize_message_type(data.get('message_type'))
     # For emoji reactions the body is empty; the emoji symbol lives in meta.reaction
     if message_type == 'emoji' and not message_text:
         message_text = (data.get('meta') or {}).get('reaction', '') or ''
