@@ -84,6 +84,12 @@ def _last_status(app) -> str | None:
         return m.status if m else None
 
 
+def _last_type(app) -> str | None:
+    with app.app_context():
+        m = Message.query.filter_by(channel_id=CHANNEL_ID).order_by(Message.id.desc()).first()
+        return m.message_type if m else None
+
+
 # ── Test runner ────────────────────────────────────────────────────────────────
 
 _passed = _failed = 0
@@ -214,6 +220,31 @@ def run(app, client):
         headers={'Content-Type': 'application/json', 'X-Eventyay-Signature': sig},
     )
     check('bad JSON → 400', r.status_code == 400, r.status_code)
+
+    # [11] message_type normalisation (issue #2)
+    # Eventyay may send its native event name; an out-of-range value used to
+    # corrupt the row and 500 every queue read. It must be mapped to text/emoji/qa.
+    print('\n[11] message_type normalisation → no out-of-range values reach the DB')
+    cases = [
+        ('channel.message', 'text',  'text'),
+        ('message',         'text',  'text'),
+        ('reaction',        'emoji', '👍'),
+        ('event.reaction',  'emoji', '🔥'),
+        ('question',        'qa',    'A question?'),
+        ('totally-unknown', 'text',  'mystery'),   # unknown → safe default
+        ('',                'text',  'empty type'),
+    ]
+    for raw, expected, body_text in cases:
+        _post(client, _payload(sender_id='nt-' + str(uuid.uuid4()),
+                               message=body_text, message_type=raw))
+        check(f'{raw!r} → {expected!r}', _last_type(app) == expected, _last_type(app))
+
+    # Every stored type must be one of the queue's renderable enum values, so a
+    # row can never raise on load and stall the moderation queue.
+    with app.app_context():
+        bad = [m.message_type for m in Message.query.filter_by(channel_id=CHANNEL_ID).all()
+               if m.message_type not in ('text', 'emoji', 'qa')]
+    check('no out-of-range message_type persisted', not bad, bad)
 
 
 def main():

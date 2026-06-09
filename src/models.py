@@ -46,7 +46,11 @@ class Message(db.Model):
     sender_id                = db.Column(String(255), nullable=True)
     centralauth_id           = db.Column(Integer, nullable=True)
     message                  = db.Column(Text, nullable=False)
-    message_type             = db.Column(SAEnum('text', 'emoji', 'qa'), nullable=False, default='text')
+    # Stored as a plain string (not a DB enum) so a message_type that falls
+    # outside text/emoji/qa — e.g. a raw Eventyay event name slipping through —
+    # can never make a row un-loadable and 500 the whole queue. Intake in
+    # webhook._process_message normalises incoming values to one of these.
+    message_type             = db.Column(String(16), nullable=False, default='text')
     meta                     = db.Column(Text, nullable=True)   # JSON
     profile_img              = db.Column(String(1024), nullable=True)
     user_language            = db.Column(String(10), nullable=True)
