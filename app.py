@@ -18,6 +18,21 @@ from src.models import db
 
 TOOL_NAME = "chatstream-moderate"
 
+
+def _git_version() -> str:
+    try:
+        import subprocess
+        return subprocess.check_output(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return 'unknown'
+
+
+_GIT_VERSION = _git_version()
+
 # ── Community configuration ────────────────────────────────────────────────────
 # Add Wikimedia usernames of superadmins here.
 SUPERADMIN_USERS: list[str] = ["Effeietsanders", "Exec8", "Arnav Angarkar"]
@@ -101,6 +116,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             current_username      = current_wiki_username(),
             current_centralauth_id = current_centralauth_id(),
             is_superadmin         = is_superadmin(),
+            git_version           = _GIT_VERSION,
         )
 
     # ── Auth ───────────────────────────────────────────────────────────────────

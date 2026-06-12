@@ -785,3 +785,13 @@ tr.superadmin-row td { color: var(--muted); }
 .user-picker-suggestions li.active {
   background: var(--surface2);
 }
+
+.admin-footer {
+  text-align: right;
+  padding: .4rem 1rem;
+  font-size: 11px;
+  color: var(--muted);
+}
+.admin-footer a { color: var(--muted); text-decoration: none; }
+.admin-footer a:hover { text-decoration: underline; }
+.admin-footer code { margin-left: .4rem; font-size: 11px; }
