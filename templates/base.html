@@ -42,6 +42,13 @@
     {% block content %}{% endblock %}
   </main>
 
+  {% if is_superadmin %}
+  <footer class="admin-footer">
+    <a href="https://github.com/lgelauff/chatstream-moderate" target="_blank" rel="noopener">chatstream-moderate</a>
+    <code>{{ git_version }}</code>
+  </footer>
+  {% endif %}
+
   <script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
   <script src="{{ url_for('static', filename='js/user-picker.js') }}"></script>
   {% block scripts %}{% endblock %}
