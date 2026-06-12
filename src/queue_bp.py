@@ -60,7 +60,7 @@ def queue_page(channel_id: str):
     from src.auth import get_channel_role
     channel = Channel.query.get_or_404(channel_id)
     sim = Channel.query.get('simulation')
-    sim_active   = bool(sim and sim.is_active)
+    sim_active   = bool(sim and sim.is_active and channel_id == 'simulation')
     channel_role = get_channel_role(channel_id)
     configured_languages = parse_likely_languages(channel.likely_languages)
     return render_template('queue.html', channel=channel, sim_active=sim_active,
