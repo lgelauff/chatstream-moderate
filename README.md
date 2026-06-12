@@ -126,6 +126,8 @@ ssh USERID@login.toolforge.org
 become chatstream-moderate
 ```
 
+> **Important:** all `toolforge` and `flask` commands must be run as the tool account. Always `become chatstream-moderate` after SSH — running as your personal account will fail with `Unable to load the tool's kubeconfig`.
+
 > **Reference**: `../wikimedia-coding-agent-lessons/toolforge/lessons.md` has ground-truth Toolforge deployment notes.
 
 ### 4. Clone the repository
@@ -216,6 +218,8 @@ The database schema is created automatically on first startup.
 
 ### Updating
 
+> **Reminder:** run all commands as the tool account (`become chatstream-moderate`), not as your personal Wikimedia account.
+
 For code changes (no new dependencies), run from the bastion (the script handles `cd` internally):
 
 ```bash
@@ -231,11 +235,16 @@ For dependency changes (new packages added to `pyproject.toml`), you must reinst
 toolforge webservice --backend=kubernetes python3.13 shell
 ~/www/python/venv/bin/python3 -m pip install -e ~/chatstream-moderate
 exit
-cd ~/chatstream-moderate
-FLASK_APP=app.py ~/www/python/venv/bin/python -m flask db upgrade
 cd ~
 toolforge webservice --backend=kubernetes python3.13 restart
 ```
+
+> **Note on migrations:** `flask db upgrade` run from the bastion hits SQLite (dev.db), not the production MariaDB. If you need to run a migration manually, do it inside the webservice shell where the DB secrets are injected:
+> ```bash
+> toolforge webservice --backend=kubernetes python3.13 shell
+> cd ~/chatstream-moderate && FLASK_APP=app.py ~/www/python/venv/bin/python -m flask db upgrade
+> exit
+> ```
 
 ### Troubleshooting
 
