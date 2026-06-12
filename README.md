@@ -216,11 +216,14 @@ The database schema is created automatically on first startup.
 
 ### Updating
 
-For code changes (no new dependencies):
+For code changes (no new dependencies), run from the bastion (the script handles `cd` internally):
 
 ```bash
-bash ~/chatstream-moderate/deploy.sh
+bash ~/chatstream-moderate/deploy.sh              # deploy main
+bash ~/chatstream-moderate/deploy.sh my-branch   # deploy a specific branch
 ```
+
+> **Note:** always run via `bash ~/chatstream-moderate/deploy.sh`, not from inside `~/chatstream-moderate` with a bare `./deploy.sh` — the script changes into the repo directory itself and works correctly from any starting directory.
 
 For dependency changes (new packages added to `pyproject.toml`), you must reinstall inside the webservice shell:
 
@@ -228,6 +231,8 @@ For dependency changes (new packages added to `pyproject.toml`), you must reinst
 toolforge webservice --backend=kubernetes python3.13 shell
 ~/www/python/venv/bin/python3 -m pip install -e ~/chatstream-moderate
 exit
+cd ~/chatstream-moderate
+FLASK_APP=app.py ~/www/python/venv/bin/python -m flask db upgrade
 cd ~
 toolforge webservice --backend=kubernetes python3.13 restart
 ```
