@@ -35,7 +35,7 @@
     <h3>Webhook</h3>
     <div class="form-row">
       <label>Webhook URL</label>
-      <code class="secret-display">{{ request.host_url.rstrip('/') }}/webhook/channel/{{ channel.id }}</code>
+      <code>{{ url_for('webhook.webhook_challenge', channel_id=channel.id, _external=True, _scheme='https') }}</code>
     </div>
     <div class="form-row">
       <label>HMAC secret</label>
