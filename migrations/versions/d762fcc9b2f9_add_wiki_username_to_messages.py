@@ -17,10 +17,19 @@ depends_on = None
 
 
 def upgrade():
-    with op.batch_alter_table('messages', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('wiki_username', sa.String(length=255), nullable=True))
+    # db.create_all() on first boot already creates `messages` with every column
+    # in the current model — including wiki_username — so on a fresh deploy this
+    # ADD COLUMN would fail with "duplicate column". Only add it if it's missing.
+    bind = op.get_bind()
+    columns = {c['name'] for c in sa.inspect(bind).get_columns('messages')}
+    if 'wiki_username' not in columns:
+        with op.batch_alter_table('messages', schema=None) as batch_op:
+            batch_op.add_column(sa.Column('wiki_username', sa.String(length=255), nullable=True))
 
 
 def downgrade():
-    with op.batch_alter_table('messages', schema=None) as batch_op:
-        batch_op.drop_column('wiki_username')
+    bind = op.get_bind()
+    columns = {c['name'] for c in sa.inspect(bind).get_columns('messages')}
+    if 'wiki_username' in columns:
+        with op.batch_alter_table('messages', schema=None) as batch_op:
+            batch_op.drop_column('wiki_username')

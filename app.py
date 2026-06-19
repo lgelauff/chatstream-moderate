@@ -54,7 +54,17 @@ def _db_uri() -> str:
     name = _read_secret('db-name')
     if user and pw and name:
         return f'mysql+pymysql://{user}:{pw}@{host}/{name}?charset=utf8mb4'
-    return 'sqlite:///dev.db'
+    # No DB credentials present. Only fall back to SQLite when explicitly opted
+    # in (local dev / tests). In production, refuse to start rather than
+    # silently run on an ephemeral SQLite file and diverge or lose data.
+    if os.environ.get('ALLOW_SQLITE') == '1':
+        return 'sqlite:///dev.db'
+    raise RuntimeError(
+        'Database credentials missing: set DB_USER, DB_PASSWORD and DB_NAME '
+        '(via Toolforge envvars, or /etc/passwords/* secrets). Refusing to fall '
+        'back to SQLite in production — that loses data on restart. For local '
+        'dev, export ALLOW_SQLITE=1.'
+    )
 
 
 def create_app(test_config: dict | None = None) -> Flask:
@@ -62,7 +72,6 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     app.config.update(
         SECRET_KEY                    = _read_secret('secret-key') or secrets.token_hex(32),
-        SQLALCHEMY_DATABASE_URI       = _db_uri(),
         SQLALCHEMY_TRACK_MODIFICATIONS = False,
         SESSION_TYPE                  = 'sqlalchemy',
         SESSION_SQLALCHEMY            = db,
@@ -78,6 +87,11 @@ def create_app(test_config: dict | None = None) -> Flask:
     )
     if test_config:
         app.config.update(test_config)
+
+    # Resolve the DB URI only if a test/override hasn't already supplied one, so
+    # the production credential check never runs (or raises) under tests.
+    if 'SQLALCHEMY_DATABASE_URI' not in app.config:
+        app.config['SQLALCHEMY_DATABASE_URI'] = _db_uri()
 
     if not app.debug:
         app.config['SESSION_COOKIE_SECURE'] = True
