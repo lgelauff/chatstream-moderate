@@ -1,10 +1,13 @@
 import hashlib
 import hmac
 import json
+import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, request, jsonify, render_template, abort, current_app
 from sqlalchemy import or_
+from sqlalchemy.exc import SQLAlchemyError
 from src.models import db, Channel, Message, Blacklist, GlobalBlacklist, BlockedPattern, Whitelist
 from src.utils import levenshtein, parse_likely_languages
 
@@ -32,16 +35,165 @@ def _normalize_message_type(raw: str | None) -> str:
 
 
 def _verify_hmac(secret: str, body: bytes, signature: str) -> bool:
+    # compare_digest raises TypeError on non-ASCII str; a junk header is just a bad signature.
+    if not signature.isascii():
+        return False
     expected = 'sha256=' + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
+def _is_system_message(data: dict) -> bool:
+    """System messages describe the connection itself (e.g. a setup test).
+    They are never queued or displayed. Matched as loosely as message types are
+    normalised elsewhere, so "System" can't slip through as chat."""
+    return (str(data.get('message_type') or '').strip().lower() == 'system'
+            or str(data.get('message_id') or '').startswith('system-'))
+
+
+def _meta(data: dict) -> dict:
+    meta = data.get('meta')
+    return meta if isinstance(meta, dict) else {}
+
+
+# ── Eventyay connection status (Channel.eventyay_status) ──────────────────────
+# Latest system message per room and kind, as JSON:
+#   {"<room id>": {"name": "Main Hall", "last": {"test": {"at": "…Z"},
+#                                               "disconnected": {"at": "…Z", "reason": "revoked"}}}}
+# Room id "" = payload didn't say which room. Only the latest of each kind is
+# kept; there is no history. Limits keep a misbehaving sender from growing it:
+# when one is hit, the oldest entry is dropped and a warning is logged.
+# STATUS_MAX_BYTES keeps the stored JSON inside MariaDB TEXT (65,535 bytes);
+# json.dumps escapes non-ASCII (ensure_ascii, the default), so len() is bytes.
+
+STATUS_MAX_ROOMS = 50
+STATUS_MAX_KINDS = 10
+STATUS_MAX_BYTES = 60_000
+_STATUS_KIND_RE = re.compile(r'[A-Za-z0-9_.-]{1,32}')   # used with fullmatch
+
+
+def load_eventyay_status(raw: str | None) -> dict:
+    try:
+        data = json.loads(raw) if raw else {}
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _room_latest_at(entry: dict) -> str:
+    last = entry.get('last') if isinstance(entry, dict) else None
+    if not isinstance(last, dict):
+        return ''
+    return max((v.get('at', '') for v in last.values() if isinstance(v, dict)), default='')
+
+
+def _clean(value, max_len: int) -> str:
+    """Text from a payload, safe to store and render: cut to max_len, unencodable
+    characters (e.g. lone surrogates) replaced, control/format characters
+    (Unicode category C, incl. bidi overrides) dropped."""
+    s = str(value)[:max_len].encode('utf-8', 'replace').decode('utf-8')
+    return ''.join(ch for ch in s if not unicodedata.category(ch).startswith('C'))
+
+
+def _record_system_status(channel: Channel, data: dict) -> None:
+    meta = _meta(data)
+    kind = meta.get('kind')
+    if not isinstance(kind, str) or not _STATUS_KIND_RE.fullmatch(kind):
+        current_app.logger.warning('Ignoring system message with invalid kind on channel %s', channel.id)
+        return
+    room = meta.get('room')
+    if not isinstance(room, dict):
+        room = {}
+    room_id = '' if room.get('id') in (None, '') else _clean(room['id'], 64)
+
+    status = load_eventyay_status(channel.eventyay_status)
+    entry = status.get(room_id)
+    if not isinstance(entry, dict):
+        entry = {}
+    if room_id not in status and len(status) >= STATUS_MAX_ROOMS:
+        oldest = min(status, key=lambda r: _room_latest_at(status[r]))
+        del status[oldest]
+        current_app.logger.warning('Eventyay status for channel %s hit %d rooms; dropped oldest room',
+                                   channel.id, STATUS_MAX_ROOMS)
+
+    if room.get('name'):
+        entry['name'] = _clean(room['name'], 255) or None
+    else:
+        entry.setdefault('name', None)
+    last = entry.get('last')
+    if not isinstance(last, dict):
+        last = {}
+    if kind not in last and len(last) >= STATUS_MAX_KINDS:
+        oldest = min(last, key=lambda k: last[k].get('at', '') if isinstance(last[k], dict) else '')
+        del last[oldest]
+        current_app.logger.warning('Eventyay status for channel %s room %r hit %d kinds; dropped oldest kind',
+                                   channel.id, room_id, STATUS_MAX_KINDS)
+
+    item = {'at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
+    reason = meta.get('reason')
+    if isinstance(reason, str) and _clean(reason, 64):
+        item['reason'] = _clean(reason, 64)
+    last[kind] = item
+    entry['last'] = last
+    status[room_id] = entry
+    payload = json.dumps(status, separators=(',', ':'))
+    dropped = 0
+    while len(payload) > STATUS_MAX_BYTES and len(status) > 1:
+        oldest = min((r for r in status if r != room_id), key=lambda r: _room_latest_at(status[r]))
+        del status[oldest]
+        payload = json.dumps(status, separators=(',', ':'))
+        dropped += 1
+    if dropped:
+        current_app.logger.warning('Eventyay status for channel %s over %d bytes; dropped %d oldest room(s)',
+                                   channel.id, STATUS_MAX_BYTES, dropped)
+    channel.eventyay_status = payload
+    try:
+        db.session.commit()
+    except SQLAlchemyError:
+        # Status is best-effort; never let it turn a delivered message into a 500.
+        db.session.rollback()
+        current_app.logger.exception('Could not save Eventyay status for channel %s', channel.id)
+
+
+def eventyay_status_rows(raw: str | None) -> list[dict]:
+    """Status as display rows, newest room first."""
+    status = load_eventyay_status(raw)
+    rows = []
+    for room_id, entry in status.items():
+        if not isinstance(entry, dict):
+            continue
+        # Clean again on the way out, so a value stored before cleaning existed
+        # (or written some other way) can never break the settings page.
+        name = (_clean(entry['name'], 255) if entry.get('name') else '') or \
+            (f'Room {_clean(room_id, 64)}' if room_id else 'Room not reported')
+        last = entry.get('last') if isinstance(entry.get('last'), dict) else {}
+        kinds = []
+        for kind in sorted(last):
+            v = last[kind] if isinstance(last[kind], dict) else {}
+            at = _clean(v.get('at', ''), 32)
+            reason = _clean(v['reason'], 64) if v.get('reason') else None
+            kinds.append({'kind': _clean(kind, 32), 'at': at.replace('T', ' ').replace('Z', ' UTC'),
+                          'reason': reason})
+        rows.append({'room': name, 'kinds': kinds, 'latest': _room_latest_at(entry)})
+    rows.sort(key=lambda r: r['latest'], reverse=True)
+    return rows
+
+
 @webhook_bp.get('/webhook/channel/<channel_id>')
 def webhook_challenge(channel_id: str):
-    Channel.query.get_or_404(channel_id)
+    # Same rule as webhook_receive: an inactive (e.g. archived) channel doesn't
+    # exist for Eventyay, so setup can't succeed against it.
+    channel = Channel.query.get(channel_id)
+    if not channel or not channel.is_active:
+        abort(404)
     challenge = request.args.get('challenge', '')
     if not challenge:
         abort(400)
+    # Eventyay may sign the challenge token with the channel secret. When it
+    # does, a mismatch means the secret entered in Eventyay is wrong: refuse,
+    # so the save fails there instead of every later message failing here.
+    sig = request.headers.get('X-Eventyay-Signature')
+    if sig is not None and not _verify_hmac(channel.webhook_hmac_secret, challenge.encode(), sig):
+        abort(403)
     return jsonify({'challenge': challenge})
 
 
@@ -66,6 +218,11 @@ def webhook_receive(channel_id: str):
                 return jsonify({'ok': False, 'error': 'timestamp too old'}), 400
         except ValueError:
             abort(400)
+    if _is_system_message(data):
+        # Never queued or displayed. Record the latest of each kind per room;
+        # always answer 200 so the sender sees the message as delivered.
+        _record_system_status(channel, data)
+        return jsonify({'ok': True, 'system': True})
     _process_message(channel, data)
     return jsonify({'ok': True})
 

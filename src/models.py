@@ -18,6 +18,11 @@ class Channel(db.Model):
     language_detection_enabled = db.Column(Boolean, nullable=False, default=False)
     default_language          = db.Column(String(10), nullable=False, default='en')
     likely_languages          = db.Column(Text, nullable=True)   # JSON array
+    # Latest Eventyay system message per room and kind (JSON object), e.g.
+    # {"12": {"name": "Main Hall", "last": {"test": {"at": "2026-11-04T14:02:11Z"}}}}.
+    # Written only from correctly signed system messages; format and size
+    # limits in webhook.py (_record_system_status).
+    eventyay_status           = db.Column(Text, nullable=True)
     emoji_auto_approve        = db.Column(Boolean, nullable=False, default=True)
     anonymous_label           = db.Column(String(64), nullable=False, default='Anonymous')
     anonymous_counter         = db.Column(Integer, nullable=False, default=0)
