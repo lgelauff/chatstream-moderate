@@ -6,9 +6,21 @@ No running server or external services required.
 ```
 .venv/bin/python tests/test_webhook.py
 .venv/bin/python tests/test_multiuser.py
+.venv/bin/python tests/test_settings_access.py
 ```
 
-## test_webhook.py (20 tests)
+## test_settings_access.py (30 tests)
+
+Who sees the webhook URL and HMAC secret on the channel settings page:
+channel admins and superadmins do; moderators and admins of other channels get
+403; anonymous visitors are redirected to login. Only superadmins see the
+channel edit form and the signature-format note.
+
+Also covers cutting a connection off: only a superadmin can tick "Regenerate
+webhook secret"; afterwards the old secret gets 403 and the new one is
+accepted. Saving that form no longer resets `is_public`.
+
+## test_webhook.py (28 tests)
 
 Covers the webhook intake pipeline end-to-end:
 

@@ -28,23 +28,45 @@
         <label>Custom CSS</label>
         <textarea name="custom_css" class="form-input form-textarea" placeholder="/* injected into display pages */">{{ channel.custom_css or '' }}</textarea>
       </div>
+      <div class="form-row checkbox-row">
+        <label><input type="checkbox" name="rotate_webhook_secret"> Regenerate webhook secret</label>
+      </div>
+      <p class="text-muted small">Cuts off whoever holds the current secret. Eventyay stops delivering until the new secret is pasted there.</p>
       <button type="submit" class="btn btn-primary">Save</button>
     </form>
 
     <hr>
-    <h3>Webhook</h3>
+    {% endif %}
+
+    {# Shown to channel admins and superadmins. The only guard is the route's
+       @channel_role_required('admin'); tests/test_settings_access.py checks that
+       moderators and other channels' admins get 403. #}
+    <h2>Webhook</h2>
+    <p>
+      In Eventyay: open the room → Chat → <strong>Chat Webhook Integration</strong>,
+      paste both values below, and save. Then post a test message in the room's chat
+      and check that it appears in the moderation queue.
+    </p>
     <div class="form-row">
       <label>Webhook URL</label>
-      <code>{{ url_for('webhook.webhook_challenge', channel_id=channel.id, _external=True, _scheme='https') }}</code>
+      <div class="copy-row">
+        <code id="webhook-url" class="secret-display">{{ url_for('webhook.webhook_challenge', channel_id=channel.id, _external=True, _scheme='https') }}</code>
+        <button type="button" class="btn btn-ghost btn-sm" data-copy="webhook-url">Copy</button>
+      </div>
     </div>
     <div class="form-row">
       <label>HMAC secret</label>
-      <code class="secret-display">{{ channel.webhook_hmac_secret }}</code>
+      <div class="copy-row">
+        <code id="webhook-secret" class="secret-display">{{ channel.webhook_hmac_secret }}</code>
+        <button type="button" class="btn btn-ghost btn-sm" data-copy="webhook-secret">Copy</button>
+      </div>
+      <p class="text-muted small">Treat this like a password: anyone who has it can send messages to this channel. "Regenerate token" further down changes only the RSS display token, not this secret. If this secret leaks, ask a superadmin to regenerate it.</p>
     </div>
+    {% if is_superadmin %}
     <p class="text-muted small">Send as <code>X-Eventyay-Signature: sha256=&lt;HMAC-SHA256(body, secret)&gt;</code></p>
+    {% endif %}
 
     <hr>
-    {% endif %}
 
     <h2>Moderation</h2>
     <form method="post" action="{{ url_for('admin.channel_settings_post', channel_id=channel.id) }}">
@@ -189,4 +211,22 @@
     </table>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.querySelectorAll('[data-copy]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        const text = document.getElementById(btn.dataset.copy).textContent.trim();
+        await navigator.clipboard.writeText(text);
+        btn.textContent = 'Copied';
+      } catch (e) {
+        btn.textContent = 'Copy failed';
+      }
+      clearTimeout(btn._resetTimer);
+      btn._resetTimer = setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+  });
+</script>
 {% endblock %}
