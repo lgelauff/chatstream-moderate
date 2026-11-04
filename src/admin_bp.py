@@ -70,10 +70,16 @@ def channel_edit_post(channel_id: str):
     ch.name        = request.form.get('name', ch.name).strip()
     ch.description = request.form.get('description', '').strip() or None
     ch.is_active   = 'is_active' in request.form
-    ch.is_public   = 'is_public' in request.form
+    # is_public is owned by the Moderation form (channel_settings_post); this
+    # form has no such field, so setting it here would make every save private.
     ch.custom_css  = request.form.get('custom_css', '').strip() or None
+    # Cut-off: a new secret makes every sender holding the old one get 403.
+    rotated = 'rotate_webhook_secret' in request.form
+    if rotated:
+        ch.webhook_hmac_secret = generate_token()
     db.session.commit()
-    flash('Channel updated.')
+    flash('Channel updated. New webhook secret generated: paste it into Eventyay to reconnect.'
+          if rotated else 'Channel updated.')
     return redirect(url_for('admin.channel_edit', channel_id=channel_id))
 
 

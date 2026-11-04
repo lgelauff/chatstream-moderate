@@ -795,3 +795,8 @@ tr.superadmin-row td { color: var(--muted); }
 .admin-footer a { color: var(--muted); text-decoration: none; }
 .admin-footer a:hover { text-decoration: underline; }
 .admin-footer code { margin-left: .4rem; font-size: 11px; }
+
+/* Value + Copy button on one line (channel settings, webhook block) */
+.copy-row { display: flex; gap: .5rem; align-items: center; }
+.copy-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.copy-row .btn { flex: none; }
