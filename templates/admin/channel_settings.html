@@ -93,6 +93,27 @@
     <p><a href="{{ url_for('display.rss_all', channel_id=channel.id) }}" target="_blank">All approved messages</a></p>
     <p><a href="{{ url_for('display.rss_highlights', channel_id=channel.id) }}" target="_blank">Highlights only</a></p>
 
+    {% if eventyay_status %}
+    <hr>
+    <h3>Eventyay connection</h3>
+    <p class="text-muted small">Latest connection messages from Eventyay. Only correctly signed messages are listed, so a test here means the URL and secret are right.</p>
+    <table class="table">
+      <thead><tr><th>Room</th><th>Last received</th></tr></thead>
+      <tbody>
+      {% for row in eventyay_status %}
+        <tr>
+          <td>{{ row.room }}</td>
+          <td>
+          {% for it in row.kinds %}
+            {{ it.kind }}{% if it.reason %} ({{ it.reason }}){% endif %}: {{ it.at }}{% if not loop.last %}<br>{% endif %}
+          {% endfor %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
     {% if is_superadmin %}
     <hr>
     <h3>Danger zone</h3>

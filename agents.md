@@ -130,6 +130,12 @@ New tables are created automatically. Schema changes that alter existing tables 
 
 ## Message intake order
 
+`webhook.py:webhook_receive()`, after HMAC and timestamp checks:
+
+- **System messages** (`message_type == "system"` or `message_id` starting with `system-`) describe the connection, not chat. They are never stored as `Message` rows and always get `{"ok": true, "system": true}`. The latest message of each `meta.kind` is kept per room (`meta.room.id`, `''` if absent) in `Channel.eventyay_status` (JSON, no history). Limits: 50 rooms, 10 kinds per room, kind names `[A-Za-z0-9_.-]{1,32}` (fullmatch), and at most 60,000 bytes of JSON so it fits MariaDB TEXT; at the room or byte limit the oldest room is dropped, at the kind limit that room's oldest kind, with one warning in the log. Room ids, names and reasons are cleaned of unencodable and control characters. The challenge GET answers 404 for inactive channels, like the POST. A failed save is rolled back and logged; the sender still gets 200.
+- Chat messages go to `_process_message()`; they don't touch `eventyay_status`.
+- The challenge `GET` checks `X-Eventyay-Signature` (HMAC of the challenge token) when present and returns 403 on mismatch.
+
 `webhook.py:_process_message()`:
 
 1. Deduplicate by `eventyay_message_id` — silently skip

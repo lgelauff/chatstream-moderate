@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import requests as _http
 from flask import Blueprint, current_app, abort, request, render_template, redirect, url_for, flash, jsonify
 from src.models import db, Channel, ChannelMember, Blacklist, GlobalBlacklist, Whitelist
+from src.webhook import eventyay_status_rows
 from src.auth import superadmin_required, channel_role_required, verify_csrf, current_centralauth_id, current_wiki_username
 from src.utils import generate_token
 
@@ -222,7 +223,8 @@ def channel_settings(channel_id: str):
     members_by_caid = {str(m.centralauth_id): m.role for m in admins + moderators}
     return render_template('admin/channel_settings.html', channel=channel,
                            admins=admins, moderators=moderators,
-                           superadmins=superadmins, members_by_caid=members_by_caid)
+                           superadmins=superadmins, members_by_caid=members_by_caid,
+                           eventyay_status=eventyay_status_rows(channel.eventyay_status))
 
 
 @admin_bp.post('/channel/<channel_id>/settings')
