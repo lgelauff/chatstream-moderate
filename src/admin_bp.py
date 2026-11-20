@@ -4,6 +4,8 @@ import json
 import uuid
 from datetime import datetime, timezone
 import requests as _http
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from flask import Blueprint, current_app, abort, request, render_template, redirect, url_for, flash, jsonify
 from src.models import db, Channel, ChannelMember, Blacklist, GlobalBlacklist, Whitelist
 from src.auth import superadmin_required, channel_role_required, verify_csrf, current_centralauth_id, current_wiki_username
@@ -317,16 +319,34 @@ def channel_whitelist_remove(channel_id: str):
 def channel_blacklist_export(channel_id: str):
     verify_csrf()
     entry = Blacklist.query.filter_by(id=int(request.form.get('id', 0)), channel_id=channel_id).first_or_404()
-    if not GlobalBlacklist.query.filter_by(screen_name=entry.screen_name).first():
-        db.session.add(GlobalBlacklist(
-            screen_name=entry.screen_name,
-            sender_id=entry.sender_id,
-            centralauth_id=entry.centralauth_id,
-            added_by_centralauth_id=current_centralauth_id(),
-            added_by_wiki_username=current_wiki_username() or '',
-        ))
-        db.session.commit()
-        flash(f'{entry.screen_name} added to global blacklist.')
-    else:
+    # Same identity rule as intake (webhook._is_blocked): an entry with an ID is
+    # the same person only if an ID matches; a name-only entry matches on the name.
+    ids = []
+    if entry.sender_id:
+        ids.append(GlobalBlacklist.sender_id == entry.sender_id)
+    if entry.centralauth_id:
+        ids.append(GlobalBlacklist.centralauth_id == entry.centralauth_id)
+    query = GlobalBlacklist.query.filter(
+        or_(*ids) if ids else GlobalBlacklist.screen_name == entry.screen_name
+    )
+    if query.first():
         flash(f'{entry.screen_name} is already on the global blacklist.')
+        return redirect(url_for('admin.channel_blacklist', channel_id=channel_id))
+    db.session.add(GlobalBlacklist(
+        screen_name=entry.screen_name,
+        sender_id=entry.sender_id,
+        centralauth_id=entry.centralauth_id,
+        added_by_centralauth_id=current_centralauth_id(),
+        added_by_wiki_username=current_wiki_username() or '',
+    ))
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # global_blacklist.screen_name is still unique in the schema, so a
+        # different person who uses the same display name can't be added yet.
+        db.session.rollback()
+        flash(f'Another sender named {entry.screen_name} is already on the global blacklist; '
+              'the global list cannot hold two people with the same display name yet.')
+    else:
+        flash(f'{entry.screen_name} added to global blacklist.')
     return redirect(url_for('admin.channel_blacklist', channel_id=channel_id))

@@ -4,7 +4,7 @@ import json
 import uuid
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, request, jsonify, render_template, abort, current_app
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from src.models import db, Channel, Message, Blacklist, GlobalBlacklist, BlockedPattern, Whitelist
 from src.utils import levenshtein, parse_likely_languages
 
@@ -93,35 +93,49 @@ def dev_inject(channel_id: str):
     return jsonify({'ok': True})
 
 
+def _has_no_id(model):
+    """SQL condition: the list entry carries neither a sender_id nor a centralauth_id."""
+    return and_(or_(model.sender_id.is_(None), model.sender_id == ''),
+                model.centralauth_id.is_(None))
+
+
+def _id_conditions(model, sender_id: str | None, centralauth_id: int | None) -> list:
+    """Match list entries on stable identifiers only. Display names are chosen
+    by the sender and aren't unique, so they never identify a person (issue #6)."""
+    conditions: list = []
+    if centralauth_id:
+        conditions.append(model.centralauth_id == centralauth_id)
+    if sender_id:
+        conditions.append(model.sender_id == sender_id)
+    return conditions
+
+
+def _block_conditions(model, screen_name: str, sender_id: str | None, centralauth_id: int | None) -> list:
+    """Entries with an ID match on that ID. An entry without any ID is an
+    explicit display-name ban and still matches on the name."""
+    conditions = _id_conditions(model, sender_id, centralauth_id)
+    if screen_name:
+        conditions.append(and_(_has_no_id(model), model.screen_name == screen_name))
+    return conditions
+
+
 def _is_blocked(channel: Channel, screen_name: str, sender_id: str | None, centralauth_id: int | None) -> bool:
-    conditions: list = [GlobalBlacklist.screen_name == screen_name]
-    if centralauth_id:
-        conditions.append(GlobalBlacklist.centralauth_id == centralauth_id)
-    if sender_id:
-        conditions.append(GlobalBlacklist.sender_id == sender_id)
-    if GlobalBlacklist.query.filter(or_(*conditions)).first():
+    conditions = _block_conditions(GlobalBlacklist, screen_name, sender_id, centralauth_id)
+    if conditions and GlobalBlacklist.query.filter(or_(*conditions)).first():
         return True
-    conditions2: list = [Blacklist.screen_name == screen_name, Blacklist.channel_id == channel.id]
-    extra: list = []
-    if centralauth_id:
-        extra.append(Blacklist.centralauth_id == centralauth_id)
-    if sender_id:
-        extra.append(Blacklist.sender_id == sender_id)
-    base = Blacklist.query.filter(Blacklist.channel_id == channel.id)
-    id_conditions = [Blacklist.screen_name == screen_name] + extra
-    if base.filter(or_(*id_conditions)).first():
-        return True
-    return False
+    conditions = _block_conditions(Blacklist, screen_name, sender_id, centralauth_id)
+    return bool(conditions) and bool(
+        Blacklist.query
+        .filter(Blacklist.channel_id == channel.id)
+        .filter(or_(*conditions))
+        .first()
+    )
 
 
 def _is_whitelisted(channel: Channel, screen_name: str, sender_id: str | None, centralauth_id: int | None) -> bool:
-    conditions: list = []
-    if sender_id:
-        conditions.append(Whitelist.sender_id == sender_id)
-    if centralauth_id:
-        conditions.append(Whitelist.centralauth_id == centralauth_id)
-    if screen_name:
-        conditions.append(Whitelist.screen_name == screen_name)
+    # Auto-approval skips moderation, so it needs a stable ID: a message
+    # without one is never auto-approved, whatever its display name.
+    conditions = _id_conditions(Whitelist, sender_id, centralauth_id)
     if not conditions:
         return False
     return bool(

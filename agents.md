@@ -111,8 +111,12 @@ Auth decorators live in `src/auth.py`:
 `DECISION_RANK = {highlighted: 1, approved: 2, rejected: 3}`  
 Lower rank number = higher priority. A status can only move to a *lower* rank number, never higher. Returns `{superseded: True}` if ignored.
 
+**Blacklist/whitelist matching** (`webhook.py:_is_blocked` / `_is_whitelisted`, issue #6):  
+Entries match on `sender_id` or `centralauth_id` only; `screen_name` never identifies a sender. A message without either ID is never auto-approved, and Allow is refused for it. The one exception is a ban entry with no ID at all: it is an explicit display-name ban and matches on `screen_name`. Ban/Allow retro-apply to queued messages and the export to the global list use the same rule.
+
 **Blacklist/whitelist dedup** (application-level, not DB constraint):  
-Check by `sender_id` first when present, else by `screen_name`.  
+Check by `sender_id` / `centralauth_id` when present; only a sender without any ID is deduped by `screen_name`.  
+`global_blacklist.screen_name` is still `unique` in the schema, so two different senders with the same display name can't both be on the global list yet (the export reports this instead of failing).  
 The unique DB index is on `(channel_id, sender_id)` — NULLs are allowed multiple times in both SQLite and MySQL UNIQUE indexes.
 
 **Webhook replay protection**:  

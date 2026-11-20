@@ -6,6 +6,7 @@ No running server or external services required.
 ```
 .venv/bin/python tests/test_webhook.py
 .venv/bin/python tests/test_multiuser.py
+.venv/bin/python tests/test_identity_matching.py
 ```
 
 ## test_webhook.py (20 tests)
@@ -35,3 +36,12 @@ Simulates two moderators acting on the same queued message, verifying the
 | highlight → approve | approve wins |
 | highlight → reject  | reject wins |
 | approve → highlight | highlight blocked |
+
+## test_identity_matching.py (23 tests)
+
+Allow/block lists match senders on stable IDs, not on display names (issue #6):
+
+- **Allow list** — a copied display name, or a message without any ID, is never auto-approved; `centralauth_id` alone is enough; legacy name-only allow entries no longer auto-approve
+- **Channel and global bans** — entries with an ID block only that sender (under any name); people sharing the name still get through; explicit name-only bans still block by name
+- **Ban / Allow buttons** — retro-apply only to that sender's queued messages; Allow without any ID is refused; Ban dedupes on ID, so two people with the same name get two entries
+- **Export to global list** — dedupes on ID; a same-name entry for another sender doesn't 500
