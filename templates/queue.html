@@ -273,17 +273,20 @@ function makeCard(msg) {
   });
   userActions.appendChild(ban);
 
-  const allow = document.createElement('button');
-  allow.className = 'btn btn-whitelist btn-sm';
-  allow.title     = 'Whitelist user — future messages auto-approved (key 6)';
-  allow.appendChild(hint('6'));
-  allow.appendChild(document.createTextNode('Allow'));
-  allow.addEventListener('click', e => {
-    e.stopPropagation();
-    dismissCard(msg.id);
-    apiPost(`/api/channel/${CHANNEL_ID}/whitelist-user`, userBody);
-  });
-  userActions.appendChild(allow);
+  // Allowing is keyed on the sender's ID; without one there is nothing safe to allow (issue #6)
+  if (msg.sender_id || msg.centralauth_id) {
+    const allow = document.createElement('button');
+    allow.className = 'btn btn-whitelist btn-sm';
+    allow.title     = 'Whitelist user — future messages auto-approved (key 6)';
+    allow.appendChild(hint('6'));
+    allow.appendChild(document.createTextNode('Allow'));
+    allow.addEventListener('click', e => {
+      e.stopPropagation();
+      dismissCard(msg.id);
+      apiPost(`/api/channel/${CHANNEL_ID}/whitelist-user`, userBody);
+    });
+    userActions.appendChild(allow);
+  }
 
   meta.appendChild(userActions);
 

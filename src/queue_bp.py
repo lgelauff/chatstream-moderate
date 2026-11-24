@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, render_template, abort
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from src.models import db, Channel, Message, Blacklist, BlockedPattern, ModerationLog, Whitelist
 from src.auth import channel_role_required, verify_csrf, current_centralauth_id, current_wiki_username
 from src.utils import levenshtein, parse_likely_languages
@@ -176,35 +176,64 @@ def reject_similar(channel_id: str, msg_id: int):
     return jsonify({'ok': True, 'rejected': rejected})
 
 
+def _form_sender() -> tuple[str, str | None, int | None]:
+    screen_name = request.form.get('screen_name', '').strip()
+    sender_id   = request.form.get('sender_id') or None
+    raw_caid    = (request.form.get('centralauth_id') or '').strip()
+    centralauth_id = int(raw_caid) if raw_caid.isdigit() else None
+    return screen_name, sender_id, centralauth_id
+
+
+def _list_entry_ids(model, sender_id: str | None, centralauth_id: int | None) -> list:
+    conditions: list = []
+    if sender_id:
+        conditions.append(model.sender_id == sender_id)
+    if centralauth_id:
+        conditions.append(model.centralauth_id == centralauth_id)
+    return conditions
+
+
+def _is_same_sender(m: Message, sender_id: str | None, centralauth_id: int | None) -> bool:
+    """Whether a queued message is from the given sender, judged on IDs only."""
+    return bool((sender_id and m.sender_id == sender_id) or
+                (centralauth_id and m.centralauth_id == centralauth_id))
+
+
 @queue_bp.post('/api/channel/<channel_id>/block-user')
 @channel_role_required('admin', 'moderator')
 def block_user(channel_id: str):
     verify_csrf()
-    screen_name = request.form.get('screen_name', '').strip()
-    sender_id   = request.form.get('sender_id') or None
-    if not screen_name and not sender_id:
-        return jsonify({'ok': False, 'error': 'screen_name or sender_id required'})
-    # Dedup: prefer sender_id as the canonical key when available
-    existing = (
-        Blacklist.query.filter_by(channel_id=channel_id, sender_id=sender_id).first()
-        if sender_id else
-        Blacklist.query.filter_by(channel_id=channel_id, screen_name=screen_name).first()
-    )
+    screen_name, sender_id, centralauth_id = _form_sender()
+    if not screen_name and not sender_id and not centralauth_id:
+        return jsonify({'ok': False, 'error': 'screen_name, sender_id or centralauth_id required'})
+    # A sender with an ID is banned by that ID only, so others who use the same
+    # display name aren't affected (issue #6). Only a sender without any ID is
+    # banned by display name; webhook._is_blocked matches such entries on the name.
+    ids = _list_entry_ids(Blacklist, sender_id, centralauth_id)
+    if ids:
+        existing = Blacklist.query.filter(Blacklist.channel_id == channel_id, or_(*ids)).first()
+    else:
+        existing = Blacklist.query.filter(
+            Blacklist.channel_id == channel_id,
+            Blacklist.screen_name == screen_name,
+            or_(Blacklist.sender_id.is_(None), Blacklist.sender_id == ''),
+            Blacklist.centralauth_id.is_(None),
+        ).first()
     if not existing:
         db.session.add(Blacklist(
             channel_id=channel_id,
             screen_name=screen_name,
             sender_id=sender_id,
-            centralauth_id=int(request.form['centralauth_id']) if request.form.get('centralauth_id') else None,
+            centralauth_id=centralauth_id,
             added_by_centralauth_id=current_centralauth_id(),
             added_by_wiki_username=current_wiki_username() or '',
         ))
         now = datetime.now(timezone.utc)
         uid = current_centralauth_id()
-        # Reject all queued messages from this sender (match by sender_id OR screen_name)
+        # Reject the queued messages the new entry would have blocked at intake
         for m in Message.query.filter_by(channel_id=channel_id, status='queued').all():
-            if (sender_id and m.sender_id == sender_id) or \
-               (screen_name and m.screen_name == screen_name):
+            if (_is_same_sender(m, sender_id, centralauth_id) if ids
+                    else m.screen_name == screen_name):
                 _log(m, 'ban')
                 m.status                    = 'rejected'
                 m.processed_at              = now
@@ -217,21 +246,19 @@ def block_user(channel_id: str):
 @channel_role_required('admin', 'moderator')
 def whitelist_user(channel_id: str):
     verify_csrf()
-    screen_name = request.form.get('screen_name', '').strip()
-    sender_id   = request.form.get('sender_id') or None
-    if not screen_name and not sender_id:
-        return jsonify({'ok': False, 'error': 'screen_name or sender_id required'})
-    existing = (
-        Whitelist.query.filter_by(channel_id=channel_id, sender_id=sender_id).first()
-        if sender_id else
-        Whitelist.query.filter_by(channel_id=channel_id, screen_name=screen_name).first()
-    )
+    screen_name, sender_id, centralauth_id = _form_sender()
+    ids = _list_entry_ids(Whitelist, sender_id, centralauth_id)
+    if not ids:
+        # Allowing skips moderation, so it needs a stable ID: a display name
+        # can be copied by anyone (issue #6).
+        return jsonify({'ok': False, 'error': 'This sender has no ID, so they cannot be allowed automatically.'})
+    existing = Whitelist.query.filter(Whitelist.channel_id == channel_id, or_(*ids)).first()
     if not existing:
         db.session.add(Whitelist(
             channel_id=channel_id,
             screen_name=screen_name,
             sender_id=sender_id,
-            centralauth_id=int(request.form['centralauth_id']) if request.form.get('centralauth_id') else None,
+            centralauth_id=centralauth_id,
             added_by_centralauth_id=current_centralauth_id(),
             added_by_wiki_username=current_wiki_username() or '',
         ))
@@ -239,8 +266,7 @@ def whitelist_user(channel_id: str):
         uid = current_centralauth_id()
         # Auto-approve any queued messages from this sender
         for m in Message.query.filter_by(channel_id=channel_id, status='queued').all():
-            if (sender_id and m.sender_id == sender_id) or \
-               (screen_name and m.screen_name == screen_name):
+            if _is_same_sender(m, sender_id, centralauth_id):
                 _log(m, 'approve')
                 m.status                    = 'approved'
                 m.processed_at              = now
